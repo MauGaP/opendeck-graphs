@@ -211,6 +211,8 @@ pub async fn find_cpu_temperature() -> Result<f32> {
                 if let Ok(label) = feature.label() {
                     if label.contains("Package")
                         || label.contains("Tdie")
+                        || label.contains("Tctl")
+                        || label.contains("Tccd1")
                         || label.contains("Core 0")
                     {
                         for sub_feature in feature.sub_feature_iter() {
