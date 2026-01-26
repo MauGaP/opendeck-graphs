@@ -3,7 +3,7 @@ use lm_sensors as sensors;
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
-use sysinfo::{Components, Disks, Networks, System};
+use sysinfo::{Components, Disks, MemoryRefreshKind, Networks, System};
 
 static PREV_CPU_STATS: Mutex<Option<(u64, u64)>> = Mutex::new(None);
 static PREV_DISK_WRITE: Mutex<Option<u64>> = Mutex::new(None);
@@ -84,8 +84,10 @@ pub async fn find_cpu_load() -> Result<f32> {
 
 /// Find RAM usage percentage
 pub async fn find_ram_usage() -> Result<f32> {
-    let mut sys = System::new_all();
-    sys.refresh_memory();
+    let mut sys = System::new();
+    sys.refresh_memory_specifics(
+        MemoryRefreshKind::nothing().with_ram(),
+    );
 
     let total = sys.total_memory();
     let used = sys.used_memory();
