@@ -20,19 +20,25 @@ enum GpuVendor {
 }
 
 fn detect_gpu_vendor_for_card(card: &str) -> GpuVendor {
-    // Check NVIDIA (system-wide, not per-card via sysfs)
-    if Path::new("/proc/driver/nvidia/version").exists() {
-        return GpuVendor::Nvidia;
-    }
-
     // Check AMD
     if Path::new(&format!("/sys/class/drm/{}/device/gpu_busy_percent", card)).exists() {
         return GpuVendor::Amd;
     }
 
-    // Check Intel
+    // Check Intel via sysfs frequency file
     if Path::new(&format!("/sys/class/drm/{}/gt_cur_freq_mhz", card)).exists() {
         return GpuVendor::Intel;
+    }
+
+    // Check via PCI vendor ID
+    let vendor_path = format!("/sys/class/drm/{}/device/vendor", card);
+    if let Ok(vendor) = fs::read_to_string(&vendor_path) {
+        match vendor.trim() {
+            "0x8086" => return GpuVendor::Intel,
+            "0x10de" => return GpuVendor::Nvidia,
+            "0x1002" => return GpuVendor::Amd,
+            _ => {}
+        }
     }
 
     GpuVendor::Unknown
@@ -63,9 +69,6 @@ pub fn list_gpus() -> Vec<GpuInfo> {
                     }
                 }
             }
-        }
-        if !gpus.is_empty() {
-            return gpus;
         }
     }
 
