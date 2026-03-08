@@ -141,6 +141,9 @@ pub struct GraphSettings {
 
     // Fan settings
     pub fan_number: Option<u32>,
+
+    // GPU selection
+    pub gpu_card: Option<String>,
 }
 
 /// Data for a single graph instance
