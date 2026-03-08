@@ -18,3 +18,6 @@ Install via OpenDeck plugin manager or manually place in your plugins directory.
 
 Add the Hardware Graph action to any key and configure which sensor to monitor through the property inspector.
 
+## Experimental
+
+There is a WebSockets usecase that this plugin supports where it can retrieve data from a ws endpoint but might not work properly.
