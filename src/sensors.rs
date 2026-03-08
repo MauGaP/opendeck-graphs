@@ -19,23 +19,127 @@ enum GpuVendor {
     Unknown,
 }
 
-fn detect_gpu_vendor() -> GpuVendor {
-    // Check NVIDIA
-    if Path::new("/proc/driver/nvidia/version").exists() {
-        return GpuVendor::Nvidia;
-    }
-
+fn detect_gpu_vendor_for_card(card: &str) -> GpuVendor {
     // Check AMD
-    if Path::new("/sys/class/drm/card0/device/gpu_busy_percent").exists() {
+    if Path::new(&format!("/sys/class/drm/{}/device/gpu_busy_percent", card)).exists() {
         return GpuVendor::Amd;
     }
 
-    // Check Intel
-    if Path::new("/sys/class/drm/card0/gt_cur_freq_mhz").exists() {
+    // Check Intel via sysfs frequency file
+    if Path::new(&format!("/sys/class/drm/{}/gt_cur_freq_mhz", card)).exists() {
         return GpuVendor::Intel;
     }
 
+    // Check via PCI vendor ID
+    let vendor_path = format!("/sys/class/drm/{}/device/vendor", card);
+    if let Ok(vendor) = fs::read_to_string(&vendor_path) {
+        match vendor.trim() {
+            "0x8086" => return GpuVendor::Intel,
+            "0x10de" => return GpuVendor::Nvidia,
+            "0x1002" => return GpuVendor::Amd,
+            _ => {}
+        }
+    }
+
     GpuVendor::Unknown
+}
+
+/// Represents a detected GPU with its card name and display name
+#[derive(Debug, Clone)]
+pub struct GpuInfo {
+    pub card: String,
+    pub name: String,
+}
+
+/// Enumerate all available GPUs from /sys/class/drm
+pub fn list_gpus() -> Vec<GpuInfo> {
+    let mut gpus = Vec::new();
+
+    // Check for NVIDIA GPUs via NVML
+    if Path::new("/proc/driver/nvidia/version").exists() {
+        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+            if let Ok(count) = nvml.device_count() {
+                for i in 0..count {
+                    if let Ok(device) = nvml.device_by_index(i) {
+                        let name = device.name().unwrap_or_else(|_| format!("NVIDIA GPU {}", i));
+                        gpus.push(GpuInfo {
+                            card: format!("nvidia:{}", i),
+                            name: format!("NVIDIA {} (GPU {})", name, i),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Enumerate DRM cards
+    let drm_path = Path::new("/sys/class/drm");
+    if let Ok(entries) = fs::read_dir(drm_path) {
+        let mut cards: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                // Only top-level cardN entries (not cardN-HDMI-A-1 etc.)
+                if name.starts_with("card") && name.chars().skip(4).all(|c| c.is_ascii_digit()) {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        cards.sort();
+
+        for card in cards {
+            // Try to read GPU name from device/product_name or uevent
+            let name = read_gpu_name(&card);
+            let vendor = detect_gpu_vendor_for_card(&card);
+            let vendor_prefix = match vendor {
+                GpuVendor::Amd => "AMD",
+                GpuVendor::Intel => "Intel",
+                _ => "GPU",
+            };
+            let display_name = if name.is_empty() {
+                format!("{} {} ({})", vendor_prefix, card, card)
+            } else {
+                format!("{} - {}", card, name)
+            };
+            gpus.push(GpuInfo {
+                card: card.clone(),
+                name: display_name,
+            });
+        }
+    }
+
+    gpus
+}
+
+fn read_gpu_name(card: &str) -> String {
+    // Try PCI device name from uevent
+    let uevent_path = format!("/sys/class/drm/{}/device/uevent", card);
+    if let Ok(content) = fs::read_to_string(&uevent_path) {
+        for line in content.lines() {
+            if let Some(val) = line.strip_prefix("PCI_ID=") {
+                // val is something like "1002:744C" — look up in pci.ids or just return the ID
+                return val.to_string();
+            }
+        }
+    }
+
+    // Try hwmon name as fallback
+    let hwmon_base = format!("/sys/class/drm/{}/device/hwmon", card);
+    if let Ok(entries) = fs::read_dir(&hwmon_base) {
+        for entry in entries.flatten() {
+            let name_path = entry.path().join("name");
+            if let Ok(name) = fs::read_to_string(name_path) {
+                let name = name.trim().to_string();
+                if !name.is_empty() {
+                    return name;
+                }
+            }
+        }
+    }
+
+    String::new()
 }
 
 /// Find CPU load percentage by reading /proc/stat
@@ -230,68 +334,88 @@ pub async fn find_cpu_temperature() -> Result<f32> {
     Ok(0.0)
 }
 
-/// Find GPU load percentage
-pub async fn find_gpu_load() -> Result<f32> {
-    match detect_gpu_vendor() {
-        GpuVendor::Amd => {
-            // AMD GPU load from sysfs
-            if let Ok(load_str) = fs::read_to_string("/sys/class/drm/card0/device/gpu_busy_percent")
-            {
-                if let Ok(load) = load_str.trim().parse::<f32>() {
-                    return Ok(load);
+/// Find GPU load percentage for a specific card (e.g. "card0" or "nvidia:0")
+pub async fn find_gpu_load(card: &str) -> Result<f32> {
+    if let Some(idx_str) = card.strip_prefix("nvidia:") {
+        let idx: u32 = idx_str.parse().unwrap_or(0);
+        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+            if let Ok(device) = nvml.device_by_index(idx) {
+                if let Ok(utilization) = device.utilization_rates() {
+                    return Ok(utilization.gpu as f32);
                 }
             }
         }
-        GpuVendor::Nvidia => {
-            // NVIDIA GPU load using NVML
-            if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-                if let Ok(device) = nvml.device_by_index(0) {
-                    if let Ok(utilization) = device.utilization_rates() {
-                        return Ok(utilization.gpu as f32);
+    } else {
+        match detect_gpu_vendor_for_card(card) {
+            GpuVendor::Amd => {
+                let path = format!("/sys/class/drm/{}/device/gpu_busy_percent", card);
+                if let Ok(load_str) = fs::read_to_string(&path) {
+                    if let Ok(load) = load_str.trim().parse::<f32>() {
+                        return Ok(load);
                     }
                 }
             }
-        }
-        _ => {}
-    }
-
-    log::warn!("GPU load sensor not found");
-    Ok(0.0)
-}
-
-/// Find GPU temperature from lm-sensors
-pub async fn find_gpu_temperature() -> Result<f32> {
-    match detect_gpu_vendor() {
-        GpuVendor::Amd => {
-            // AMD GPU temperature from sysfs hwmon
-            let hwmon_path = "/sys/class/drm/card0/device/hwmon";
-            if let Ok(entries) = fs::read_dir(hwmon_path) {
-                for entry in entries.flatten() {
-                    let temp_path = entry.path().join("temp1_input");
-                    if let Ok(temp_str) = fs::read_to_string(temp_path) {
-                        if let Ok(temp_millis) = temp_str.trim().parse::<f32>() {
-                            return Ok(temp_millis / 1000.0);
+            GpuVendor::Nvidia => {
+                if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+                    if let Ok(device) = nvml.device_by_index(0) {
+                        if let Ok(utilization) = device.utilization_rates() {
+                            return Ok(utilization.gpu as f32);
                         }
                     }
                 }
             }
+            _ => {}
         }
-        GpuVendor::Nvidia => {
-            // NVIDIA GPU temperature using NVML
-            if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-                if let Ok(device) = nvml.device_by_index(0) {
-                    if let Ok(temp) = device
-                        .temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu)
-                    {
-                        return Ok(temp as f32);
-                    }
+    }
+
+    log::warn!("GPU load sensor not found for card: {}", card);
+    Ok(0.0)
+}
+
+/// Find GPU temperature for a specific card (e.g. "card0" or "nvidia:0")
+pub async fn find_gpu_temperature(card: &str) -> Result<f32> {
+    if let Some(idx_str) = card.strip_prefix("nvidia:") {
+        let idx: u32 = idx_str.parse().unwrap_or(0);
+        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+            if let Ok(device) = nvml.device_by_index(idx) {
+                if let Ok(temp) = device
+                    .temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu)
+                {
+                    return Ok(temp as f32);
                 }
             }
         }
-        _ => {}
+    } else {
+        match detect_gpu_vendor_for_card(card) {
+            GpuVendor::Amd | GpuVendor::Intel => {
+                let hwmon_path = format!("/sys/class/drm/{}/device/hwmon", card);
+                if let Ok(entries) = fs::read_dir(&hwmon_path) {
+                    for entry in entries.flatten() {
+                        let temp_path = entry.path().join("temp1_input");
+                        if let Ok(temp_str) = fs::read_to_string(temp_path) {
+                            if let Ok(temp_millis) = temp_str.trim().parse::<f32>() {
+                                return Ok(temp_millis / 1000.0);
+                            }
+                        }
+                    }
+                }
+            }
+            GpuVendor::Nvidia => {
+                if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+                    if let Ok(device) = nvml.device_by_index(0) {
+                        if let Ok(temp) = device
+                            .temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu)
+                        {
+                            return Ok(temp as f32);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
-    log::warn!("GPU temperature sensor not found");
+    log::warn!("GPU temperature sensor not found for card: {}", card);
     Ok(0.0)
 }
 

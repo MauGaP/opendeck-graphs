@@ -37,8 +37,14 @@ async fn read_lm_sensors_value(settings: &GraphSettings) -> Result<f32> {
     match settings.metric_type {
         MetricType::CpuTemp | MetricType::CpuPackageTemp => sensors::find_cpu_temperature().await,
         MetricType::CpuLoad => sensors::find_cpu_load().await,
-        MetricType::GpuTemp => sensors::find_gpu_temperature().await,
-        MetricType::GpuLoad => sensors::find_gpu_load().await,
+        MetricType::GpuTemp => {
+            let card = settings.gpu_card.as_deref().unwrap_or("card0");
+            sensors::find_gpu_temperature(card).await
+        }
+        MetricType::GpuLoad => {
+            let card = settings.gpu_card.as_deref().unwrap_or("card0");
+            sensors::find_gpu_load(card).await
+        }
         MetricType::MotherboardTemp => sensors::find_motherboard_temperature().await,
         MetricType::NvmeTemp => sensors::find_nvme_temperature().await,
         MetricType::SystemFan => {
@@ -89,6 +95,30 @@ impl Action for GraphAction {
         let mut instances = GRAPH_INSTANCES.lock().await;
         instances.remove(&instance_id);
 
+        Ok(())
+    }
+
+    async fn property_inspector_did_appear(
+        &self,
+        instance: &Instance,
+        _settings: &Self::Settings,
+    ) -> OpenActionResult<()> {
+        let gpus = sensors::list_gpus();
+        let gpu_list: Vec<serde_json::Value> = gpus
+            .iter()
+            .map(|g| {
+                serde_json::json!({
+                    "card": g.card,
+                    "name": g.name,
+                })
+            })
+            .collect();
+        let _ = instance
+            .send_to_property_inspector(serde_json::json!({
+                "event": "gpuList",
+                "gpus": gpu_list,
+            }))
+            .await;
         Ok(())
     }
 
