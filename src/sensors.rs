@@ -266,7 +266,10 @@ pub async fn find_net_download() -> Result<f32> {
     let networks = Networks::new_with_refreshed_list();
 
     let mut total_rx = 0u64;
-    for (_interface_name, network) in &networks {
+    for (interface_name, network) in &networks {
+        if interface_name == "lo" {
+            continue;
+        }
         total_rx += network.total_received();
     }
 
@@ -287,7 +290,10 @@ pub async fn find_net_upload() -> Result<f32> {
     let networks = Networks::new_with_refreshed_list();
 
     let mut total_tx = 0u64;
-    for (_interface_name, network) in &networks {
+    for (interface_name, network) in &networks {
+        if interface_name == "lo" {
+            continue;
+        }
         total_tx += network.total_transmitted();
     }
 
