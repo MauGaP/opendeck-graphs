@@ -384,7 +384,7 @@ pub async fn find_gpu_temperature(card: &str) -> Result<f32> {
         }
     } else {
         match detect_gpu_vendor_for_card(card) {
-            GpuVendor::Amd => {
+            GpuVendor::Amd | GpuVendor::Intel => {
                 let hwmon_path = format!("/sys/class/drm/{}/device/hwmon", card);
                 if let Ok(entries) = fs::read_dir(&hwmon_path) {
                     for entry in entries.flatten() {
