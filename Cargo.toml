@@ -4,7 +4,6 @@ version = "1.1.0"
 edition = "2021"
 
 [dependencies]
-lm-sensors = "0.3"
 openaction = "2.1"
 tokio = { version = "1.45", features = ["full"] }
 tokio-tungstenite = "0.24"
