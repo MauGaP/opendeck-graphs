@@ -89,6 +89,7 @@ pub fn list_gpus() -> Vec<GpuInfo> {
         cards.sort();
 
         for card in cards {
+            // Try to read GPU name from device/product_name or uevent
             let name = read_gpu_name(&card);
             let vendor = detect_gpu_vendor_for_card(&card);
             let vendor_prefix = match vendor {
@@ -117,6 +118,7 @@ fn read_gpu_name(card: &str) -> String {
     if let Ok(content) = fs::read_to_string(&uevent_path) {
         for line in content.lines() {
             if let Some(val) = line.strip_prefix("PCI_ID=") {
+                // val is something like "1002:744C" — look up in pci.ids or just return the ID
                 return val.to_string();
             }
         }
@@ -158,6 +160,7 @@ pub async fn find_cpu_load() -> Result<f32> {
                 let total = user + nice + system + idle + iowait + irq + softirq;
                 let active = user + nice + system + irq + softirq;
 
+                // Calculate CPU usage based on delta from previous reading
                 let mut prev_stats = PREV_CPU_STATS.lock().unwrap();
                 let cpu_usage = if let Some((prev_total, prev_active)) = *prev_stats {
                     let total_delta = total.saturating_sub(prev_total);
@@ -168,6 +171,7 @@ pub async fn find_cpu_load() -> Result<f32> {
                         0.0
                     }
                 } else {
+                    // First reading, return 0
                     0.0
                 };
 
@@ -201,6 +205,7 @@ pub async fn find_ram_temperature() -> Result<f32> {
 
     for component in &components {
         let label = component.label();
+        // Look for SPD5118 or other RAM temperature sensors
         if label.contains("spd5118") || label.contains("SPD5118") {
             if let Some(temp) = component.temperature() {
                 return Ok(temp);
@@ -225,7 +230,7 @@ pub async fn find_disk_write() -> Result<f32> {
     let mut prev = PREV_DISK_WRITE.lock().unwrap();
     let write_speed = if let Some(prev_written) = *prev {
         let delta = total_written.saturating_sub(prev_written);
-        (delta as f32) / 1_048_576.0
+        (delta as f32) / 1_048_576.0 // Convert to MB/s
     } else {
         0.0
     };
@@ -247,7 +252,7 @@ pub async fn find_disk_read() -> Result<f32> {
     let mut prev = PREV_DISK_READ.lock().unwrap();
     let read_speed = if let Some(prev_read) = *prev {
         let delta = total_read.saturating_sub(prev_read);
-        (delta as f32) / 1_048_576.0
+        (delta as f32) / 1_048_576.0 // Convert to MB/s
     } else {
         0.0
     };
@@ -268,7 +273,7 @@ pub async fn find_net_download() -> Result<f32> {
     let mut prev = PREV_NET_RX.lock().unwrap();
     let download_speed = if let Some(prev_rx) = *prev {
         let delta = total_rx.saturating_sub(prev_rx);
-        (delta as f32) / 1_048_576.0
+        (delta as f32) / 1_048_576.0 // Convert to MB/s
     } else {
         0.0
     };
@@ -289,7 +294,7 @@ pub async fn find_net_upload() -> Result<f32> {
     let mut prev = PREV_NET_TX.lock().unwrap();
     let upload_speed = if let Some(prev_tx) = *prev {
         let delta = total_tx.saturating_sub(prev_tx);
-        (delta as f32) / 1_048_576.0
+        (delta as f32) / 1_048_576.0 // Convert to MB/s
     } else {
         0.0
     };
