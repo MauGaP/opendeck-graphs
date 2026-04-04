@@ -148,7 +148,13 @@ impl Action for GraphAction {
 
         if let Some(graph_data) = instances.get_mut(&instance_id) {
             let old_source = graph_data.settings.data_source.clone();
+            let old_gpu_card = graph_data.settings.gpu_card.clone();
             graph_data.settings = settings.clone();
+
+            // Invalidate cached memory totals when the monitored GPU changes
+            if settings.gpu_card != old_gpu_card {
+                graph_data.vram_total_gb = None;
+            }
 
             // Reinitialize WebSocket if source changed to WebSocket
             if settings.data_source == DataSource::WebSocket && old_source != DataSource::WebSocket
