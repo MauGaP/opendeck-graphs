@@ -23,6 +23,14 @@ pub enum VisualizationType {
     Gauge,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryDisplay {
+    #[default]
+    Percentage,
+    Gigabytes,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MetricType {
@@ -31,6 +39,8 @@ pub enum MetricType {
     CpuLoad,
     GpuTemp,
     GpuLoad,
+    GpuVram,
+    GpuPower,
     MotherboardTemp,
     NvmeTemp,
     SystemFan,
@@ -58,7 +68,8 @@ impl MetricType {
             | MetricType::MotherboardTemp
             | MetricType::NvmeTemp
             | MetricType::RamTemp => 120.0,
-            MetricType::CpuLoad | MetricType::GpuLoad | MetricType::RamUsage => 100.0,
+            MetricType::CpuLoad | MetricType::GpuLoad | MetricType::GpuVram | MetricType::RamUsage => 100.0,
+            MetricType::GpuPower => 500.0,
             MetricType::SystemFan => 3000.0,
             MetricType::CpuVoltage => 2.0,
             MetricType::DiskWrite | MetricType::DiskRead => 500.0, // MB/s
@@ -69,7 +80,8 @@ impl MetricType {
     pub fn default_threshold(&self) -> Option<f32> {
         match self {
             MetricType::CpuTemp | MetricType::CpuPackageTemp => Some(80.0),
-            MetricType::CpuLoad | MetricType::GpuLoad | MetricType::RamUsage => Some(80.0),
+            MetricType::CpuLoad | MetricType::GpuLoad | MetricType::GpuVram | MetricType::RamUsage => Some(80.0),
+            MetricType::GpuPower => Some(300.0),
             MetricType::GpuTemp => Some(85.0),
             MetricType::MotherboardTemp => Some(60.0),
             MetricType::NvmeTemp => Some(70.0),
@@ -85,6 +97,8 @@ impl MetricType {
             MetricType::CpuLoad => "CPU Load",
             MetricType::GpuTemp => "GPU Temp",
             MetricType::GpuLoad => "GPU Load",
+            MetricType::GpuVram => "GPU VRAM",
+            MetricType::GpuPower => "GPU Power",
             MetricType::MotherboardTemp => "Motherboard",
             MetricType::NvmeTemp => "NVMe Temp",
             MetricType::SystemFan => "System Fan",
@@ -106,7 +120,8 @@ impl MetricType {
             | MetricType::MotherboardTemp
             | MetricType::NvmeTemp
             | MetricType::RamTemp => "°C",
-            MetricType::CpuLoad | MetricType::GpuLoad | MetricType::RamUsage => "%",
+            MetricType::CpuLoad | MetricType::GpuLoad | MetricType::GpuVram | MetricType::RamUsage => "%",
+            MetricType::GpuPower => "W",
             MetricType::SystemFan => " RPM",
             MetricType::CpuVoltage => "V",
             MetricType::DiskWrite | MetricType::DiskRead => " MB/s",
@@ -144,6 +159,30 @@ pub struct GraphSettings {
 
     // GPU selection
     pub gpu_card: Option<String>,
+
+    // Memory display mode (percentage vs gigabytes)
+    pub vram_display: MemoryDisplay,
+    pub ram_display: MemoryDisplay,
+}
+
+impl GraphSettings {
+    pub fn memory_display(&self) -> MemoryDisplay {
+        match self.metric_type {
+            MetricType::GpuVram => self.vram_display,
+            MetricType::RamUsage => self.ram_display,
+            _ => MemoryDisplay::Percentage,
+        }
+    }
+
+    pub fn effective_suffix(&self) -> &str {
+        if matches!(self.metric_type, MetricType::GpuVram | MetricType::RamUsage)
+            && self.memory_display() == MemoryDisplay::Gigabytes
+        {
+            "GB"
+        } else {
+            self.metric_type.value_suffix()
+        }
+    }
 }
 
 /// Data for a single graph instance
@@ -151,6 +190,9 @@ pub struct GraphData {
     data_points: VecDeque<f32>,
     pub settings: GraphSettings,
     ws_client: Option<Arc<WebSocketClient>>,
+    /// Cached total memory in GB (auto-detected, used for graph max and display)
+    pub vram_total_gb: Option<f32>,
+    pub ram_total_gb: Option<f32>,
 }
 
 impl GraphData {
@@ -159,6 +201,8 @@ impl GraphData {
             data_points: VecDeque::with_capacity(MAX_DATA_POINTS),
             settings,
             ws_client: None,
+            vram_total_gb: None,
+            ram_total_gb: None,
         }
     }
 
@@ -185,6 +229,14 @@ impl GraphData {
                     } else {
                         "Fan 1".to_string()
                     }
+                } else if matches!(self.settings.metric_type, MetricType::GpuVram | MetricType::RamUsage)
+                    && self.settings.memory_display() == MemoryDisplay::Gigabytes
+                {
+                    match self.settings.metric_type {
+                        MetricType::GpuVram => "VRAM GB".to_string(),
+                        MetricType::RamUsage => "RAM GB".to_string(),
+                        _ => unreachable!(),
+                    }
                 } else {
                     self.settings.metric_type.display_name().to_string()
                 }
@@ -198,7 +250,14 @@ impl GraphData {
                 .settings
                 .max_value
                 .unwrap_or_else(|| match self.settings.data_source {
-                    DataSource::LmSensors => self.settings.metric_type.default_max(),
+                    DataSource::LmSensors => {
+                        let detected_total = match self.settings.metric_type {
+                            MetricType::GpuVram if self.settings.memory_display() == MemoryDisplay::Gigabytes => self.vram_total_gb,
+                            MetricType::RamUsage if self.settings.memory_display() == MemoryDisplay::Gigabytes => self.ram_total_gb,
+                            _ => None,
+                        };
+                        detected_total.unwrap_or_else(|| self.settings.metric_type.default_max())
+                    }
                     DataSource::WebSocket => 100.0,
                 }),
             min_value: self.settings.min_value.unwrap_or(0.0),

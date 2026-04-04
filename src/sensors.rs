@@ -203,6 +203,26 @@ pub async fn find_ram_usage() -> Result<f32> {
     }
 }
 
+/// Find RAM usage in gigabytes
+pub async fn find_ram_usage_gb() -> Result<f32> {
+    let mut sys = System::new();
+    sys.refresh_memory_specifics(
+        MemoryRefreshKind::nothing().with_ram(),
+    );
+
+    Ok(sys.used_memory() as f32 / 1_073_741_824.0)
+}
+
+/// Find total RAM in gigabytes
+pub async fn find_ram_total_gb() -> Result<f32> {
+    let mut sys = System::new();
+    sys.refresh_memory_specifics(
+        MemoryRefreshKind::nothing().with_ram(),
+    );
+
+    Ok(sys.total_memory() as f32 / 1_073_741_824.0)
+}
+
 /// Find RAM temperature from sysinfo
 pub async fn find_ram_temperature() -> Result<f32> {
     let components = Components::new_with_refreshed_list();
@@ -417,6 +437,177 @@ pub async fn find_gpu_temperature(card: &str) -> Result<f32> {
 
     log::warn!("GPU temperature sensor not found for card: {}", card);
     Ok(0.0)
+}
+
+/// Find GPU VRAM usage percentage for a specific card (e.g. "card0" or "nvidia:0")
+pub async fn find_gpu_vram(card: &str) -> Result<f32> {
+    if let Some(idx_str) = card.strip_prefix("nvidia:") {
+        let idx: u32 = idx_str.parse().unwrap_or(0);
+        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+            if let Ok(device) = nvml.device_by_index(idx) {
+                if let Ok(mem_info) = device.memory_info() {
+                    let pct = (mem_info.used as f64 / mem_info.total as f64) * 100.0;
+                    return Ok(pct as f32);
+                }
+            }
+        }
+    } else {
+        match detect_gpu_vendor_for_card(card) {
+            GpuVendor::Amd => {
+                let base = format!("/sys/class/drm/{}/device", card);
+                let used = read_sysfs_f32(&format!("{}/mem_info_vram_used", base));
+                let total = read_sysfs_f32(&format!("{}/mem_info_vram_total", base));
+                if let (Ok(u), Ok(t)) = (used, total) {
+                    if t > 0.0 {
+                        return Ok((u / t) * 100.0);
+                    }
+                }
+            }
+            GpuVendor::Nvidia => {
+                if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+                    if let Ok(device) = nvml.device_by_index(0) {
+                        if let Ok(mem_info) = device.memory_info() {
+                            let pct = (mem_info.used as f64 / mem_info.total as f64) * 100.0;
+                            return Ok(pct as f32);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    log::warn!("GPU VRAM sensor not found for card: {}", card);
+    Ok(0.0)
+}
+
+/// Find GPU VRAM usage in gigabytes for a specific card (e.g. "card0" or "nvidia:0")
+pub async fn find_gpu_vram_gb(card: &str) -> Result<f32> {
+    if let Some(idx_str) = card.strip_prefix("nvidia:") {
+        let idx: u32 = idx_str.parse().unwrap_or(0);
+        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+            if let Ok(device) = nvml.device_by_index(idx) {
+                if let Ok(mem_info) = device.memory_info() {
+                    return Ok(mem_info.used as f32 / 1_073_741_824.0);
+                }
+            }
+        }
+    } else {
+        match detect_gpu_vendor_for_card(card) {
+            GpuVendor::Amd => {
+                let base = format!("/sys/class/drm/{}/device", card);
+                if let Ok(used) = read_sysfs_f32(&format!("{}/mem_info_vram_used", base)) {
+                    return Ok(used / 1_073_741_824.0);
+                }
+            }
+            GpuVendor::Nvidia => {
+                if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+                    if let Ok(device) = nvml.device_by_index(0) {
+                        if let Ok(mem_info) = device.memory_info() {
+                            return Ok(mem_info.used as f32 / 1_073_741_824.0);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    log::warn!("GPU VRAM sensor not found for card: {}", card);
+    Ok(0.0)
+}
+
+/// Find total GPU VRAM in gigabytes for a specific card (e.g. "card0" or "nvidia:0")
+pub async fn find_gpu_vram_total_gb(card: &str) -> Result<f32> {
+    if let Some(idx_str) = card.strip_prefix("nvidia:") {
+        let idx: u32 = idx_str.parse().unwrap_or(0);
+        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+            if let Ok(device) = nvml.device_by_index(idx) {
+                if let Ok(mem_info) = device.memory_info() {
+                    return Ok(mem_info.total as f32 / 1_073_741_824.0);
+                }
+            }
+        }
+    } else {
+        match detect_gpu_vendor_for_card(card) {
+            GpuVendor::Amd => {
+                let base = format!("/sys/class/drm/{}/device", card);
+                if let Ok(total) = read_sysfs_f32(&format!("{}/mem_info_vram_total", base)) {
+                    return Ok(total / 1_073_741_824.0);
+                }
+            }
+            GpuVendor::Nvidia => {
+                if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+                    if let Ok(device) = nvml.device_by_index(0) {
+                        if let Ok(mem_info) = device.memory_info() {
+                            return Ok(mem_info.total as f32 / 1_073_741_824.0);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    log::warn!("GPU VRAM total not found for card: {}", card);
+    Ok(0.0)
+}
+
+/// Find GPU power draw in watts for a specific card (e.g. "card0" or "nvidia:0")
+pub async fn find_gpu_power(card: &str) -> Result<f32> {
+    if let Some(idx_str) = card.strip_prefix("nvidia:") {
+        let idx: u32 = idx_str.parse().unwrap_or(0);
+        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+            if let Ok(device) = nvml.device_by_index(idx) {
+                if let Ok(power_mw) = device.power_usage() {
+                    return Ok(power_mw as f32 / 1000.0);
+                }
+            }
+        }
+    } else {
+        match detect_gpu_vendor_for_card(card) {
+            GpuVendor::Amd => {
+                let pattern = format!("/sys/class/drm/{}/device/hwmon/hwmon*", card);
+                if let Ok(path) = glob_first_path(&pattern) {
+                    let power_path = format!("{}/power1_average", path);
+                    if let Ok(microwatts) = read_sysfs_f32(&power_path) {
+                        return Ok(microwatts / 1_000_000.0);
+                    }
+                }
+            }
+            GpuVendor::Nvidia => {
+                if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+                    if let Ok(device) = nvml.device_by_index(0) {
+                        if let Ok(power_mw) = device.power_usage() {
+                            return Ok(power_mw as f32 / 1000.0);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    log::warn!("GPU power sensor not found for card: {}", card);
+    Ok(0.0)
+}
+
+/// Read a sysfs file as f32
+fn read_sysfs_f32(path: &str) -> Result<f32> {
+    let content = fs::read_to_string(path)?;
+    Ok(content.trim().parse()?)
+}
+
+/// Return the first match for a glob pattern as a string path
+fn glob_first_path(pattern: &str) -> Result<String> {
+    let output = std::process::Command::new("sh")
+        .args(["-c", &format!("ls -1d {} 2>/dev/null | head -1", pattern)])
+        .output()?;
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        anyhow::bail!("no match for glob: {}", pattern);
+    }
+    Ok(path)
 }
 
 /// Find motherboard temperature from lm-sensors
