@@ -2,7 +2,7 @@ use anyhow::Result;
 use lm_sensors as sensors;
 use std::fs;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use sysinfo::{Components, Disks, MemoryRefreshKind, Networks, System};
 
 static PREV_CPU_STATS: Mutex<Option<(u64, u64)>> = Mutex::new(None);
@@ -10,6 +10,21 @@ static PREV_DISK_WRITE: Mutex<Option<u64>> = Mutex::new(None);
 static PREV_DISK_READ: Mutex<Option<u64>> = Mutex::new(None);
 static PREV_NET_RX: Mutex<Option<u64>> = Mutex::new(None);
 static PREV_NET_TX: Mutex<Option<u64>> = Mutex::new(None);
+static NVML: OnceLock<Option<nvml_wrapper::Nvml>> = OnceLock::new();
+static SYSINFO: Mutex<Option<System>> = Mutex::new(None);
+
+/// Get the shared NVML instance, initializing it once on first use.
+fn nvml() -> Option<&'static nvml_wrapper::Nvml> {
+    NVML.get_or_init(|| nvml_wrapper::Nvml::init().ok()).as_ref()
+}
+
+/// Get RAM info (used, total) using a shared System instance.
+fn ram_info() -> (u64, u64) {
+    let mut guard = SYSINFO.lock().unwrap();
+    let sys = guard.get_or_insert_with(System::new);
+    sys.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram());
+    (sys.used_memory(), sys.total_memory())
+}
 
 #[derive(Debug, Clone, Copy)]
 enum GpuVendor {
@@ -57,10 +72,10 @@ pub fn list_gpus() -> Vec<GpuInfo> {
 
     // Check for NVIDIA GPUs via NVML
     if Path::new("/proc/driver/nvidia/version").exists() {
-        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-            if let Ok(count) = nvml.device_count() {
+        if let Some(nv) = nvml() {
+            if let Ok(count) = nv.device_count() {
                 for i in 0..count {
-                    if let Ok(device) = nvml.device_by_index(i) {
+                    if let Ok(device) = nv.device_by_index(i) {
                         let name = device.name().unwrap_or_else(|_| format!("NVIDIA GPU {}", i));
                         gpus.push(GpuInfo {
                             card: format!("nvidia:{}", i),
@@ -188,14 +203,7 @@ pub async fn find_cpu_load() -> Result<f32> {
 
 /// Find RAM usage percentage
 pub async fn find_ram_usage() -> Result<f32> {
-    let mut sys = System::new();
-    sys.refresh_memory_specifics(
-        MemoryRefreshKind::nothing().with_ram(),
-    );
-
-    let total = sys.total_memory();
-    let used = sys.used_memory();
-
+    let (used, total) = ram_info();
     if total > 0 {
         Ok((used as f32 / total as f32) * 100.0)
     } else {
@@ -205,22 +213,14 @@ pub async fn find_ram_usage() -> Result<f32> {
 
 /// Find RAM usage in gigabytes
 pub async fn find_ram_usage_gb() -> Result<f32> {
-    let mut sys = System::new();
-    sys.refresh_memory_specifics(
-        MemoryRefreshKind::nothing().with_ram(),
-    );
-
-    Ok(sys.used_memory() as f32 / 1_073_741_824.0)
+    let (used, _) = ram_info();
+    Ok(used as f32 / 1_073_741_824.0)
 }
 
 /// Find total RAM in gigabytes
 pub async fn find_ram_total_gb() -> Result<f32> {
-    let mut sys = System::new();
-    sys.refresh_memory_specifics(
-        MemoryRefreshKind::nothing().with_ram(),
-    );
-
-    Ok(sys.total_memory() as f32 / 1_073_741_824.0)
+    let (_, total) = ram_info();
+    Ok(total as f32 / 1_073_741_824.0)
 }
 
 /// Find RAM temperature from sysinfo
@@ -358,8 +358,8 @@ pub async fn find_cpu_temperature() -> Result<f32> {
 pub async fn find_gpu_load(card: &str) -> Result<f32> {
     if let Some(idx_str) = card.strip_prefix("nvidia:") {
         let idx: u32 = idx_str.parse().unwrap_or(0);
-        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-            if let Ok(device) = nvml.device_by_index(idx) {
+        if let Some(nv) = nvml() {
+            if let Ok(device) = nv.device_by_index(idx) {
                 if let Ok(utilization) = device.utilization_rates() {
                     return Ok(utilization.gpu as f32);
                 }
@@ -376,8 +376,8 @@ pub async fn find_gpu_load(card: &str) -> Result<f32> {
                 }
             }
             GpuVendor::Nvidia => {
-                if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-                    if let Ok(device) = nvml.device_by_index(0) {
+                if let Some(nv) = nvml() {
+                    if let Ok(device) = nv.device_by_index(0) {
                         if let Ok(utilization) = device.utilization_rates() {
                             return Ok(utilization.gpu as f32);
                         }
@@ -396,8 +396,8 @@ pub async fn find_gpu_load(card: &str) -> Result<f32> {
 pub async fn find_gpu_temperature(card: &str) -> Result<f32> {
     if let Some(idx_str) = card.strip_prefix("nvidia:") {
         let idx: u32 = idx_str.parse().unwrap_or(0);
-        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-            if let Ok(device) = nvml.device_by_index(idx) {
+        if let Some(nv) = nvml() {
+            if let Ok(device) = nv.device_by_index(idx) {
                 if let Ok(temp) = device
                     .temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu)
                 {
@@ -421,8 +421,8 @@ pub async fn find_gpu_temperature(card: &str) -> Result<f32> {
                 }
             }
             GpuVendor::Nvidia => {
-                if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-                    if let Ok(device) = nvml.device_by_index(0) {
+                if let Some(nv) = nvml() {
+                    if let Ok(device) = nv.device_by_index(0) {
                         if let Ok(temp) = device
                             .temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu)
                         {
@@ -443,8 +443,8 @@ pub async fn find_gpu_temperature(card: &str) -> Result<f32> {
 pub async fn find_gpu_vram(card: &str) -> Result<f32> {
     if let Some(idx_str) = card.strip_prefix("nvidia:") {
         let idx: u32 = idx_str.parse().unwrap_or(0);
-        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-            if let Ok(device) = nvml.device_by_index(idx) {
+        if let Some(nv) = nvml() {
+            if let Ok(device) = nv.device_by_index(idx) {
                 if let Ok(mem_info) = device.memory_info() {
                     let pct = (mem_info.used as f64 / mem_info.total as f64) * 100.0;
                     return Ok(pct as f32);
@@ -464,8 +464,8 @@ pub async fn find_gpu_vram(card: &str) -> Result<f32> {
                 }
             }
             GpuVendor::Nvidia => {
-                if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-                    if let Ok(device) = nvml.device_by_index(0) {
+                if let Some(nv) = nvml() {
+                    if let Ok(device) = nv.device_by_index(0) {
                         if let Ok(mem_info) = device.memory_info() {
                             let pct = (mem_info.used as f64 / mem_info.total as f64) * 100.0;
                             return Ok(pct as f32);
@@ -485,8 +485,8 @@ pub async fn find_gpu_vram(card: &str) -> Result<f32> {
 pub async fn find_gpu_vram_gb(card: &str) -> Result<f32> {
     if let Some(idx_str) = card.strip_prefix("nvidia:") {
         let idx: u32 = idx_str.parse().unwrap_or(0);
-        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-            if let Ok(device) = nvml.device_by_index(idx) {
+        if let Some(nv) = nvml() {
+            if let Ok(device) = nv.device_by_index(idx) {
                 if let Ok(mem_info) = device.memory_info() {
                     return Ok(mem_info.used as f32 / 1_073_741_824.0);
                 }
@@ -501,8 +501,8 @@ pub async fn find_gpu_vram_gb(card: &str) -> Result<f32> {
                 }
             }
             GpuVendor::Nvidia => {
-                if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-                    if let Ok(device) = nvml.device_by_index(0) {
+                if let Some(nv) = nvml() {
+                    if let Ok(device) = nv.device_by_index(0) {
                         if let Ok(mem_info) = device.memory_info() {
                             return Ok(mem_info.used as f32 / 1_073_741_824.0);
                         }
@@ -521,8 +521,8 @@ pub async fn find_gpu_vram_gb(card: &str) -> Result<f32> {
 pub async fn find_gpu_vram_total_gb(card: &str) -> Result<f32> {
     if let Some(idx_str) = card.strip_prefix("nvidia:") {
         let idx: u32 = idx_str.parse().unwrap_or(0);
-        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-            if let Ok(device) = nvml.device_by_index(idx) {
+        if let Some(nv) = nvml() {
+            if let Ok(device) = nv.device_by_index(idx) {
                 if let Ok(mem_info) = device.memory_info() {
                     return Ok(mem_info.total as f32 / 1_073_741_824.0);
                 }
@@ -537,8 +537,8 @@ pub async fn find_gpu_vram_total_gb(card: &str) -> Result<f32> {
                 }
             }
             GpuVendor::Nvidia => {
-                if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-                    if let Ok(device) = nvml.device_by_index(0) {
+                if let Some(nv) = nvml() {
+                    if let Ok(device) = nv.device_by_index(0) {
                         if let Ok(mem_info) = device.memory_info() {
                             return Ok(mem_info.total as f32 / 1_073_741_824.0);
                         }
@@ -557,8 +557,8 @@ pub async fn find_gpu_vram_total_gb(card: &str) -> Result<f32> {
 pub async fn find_gpu_power(card: &str) -> Result<f32> {
     if let Some(idx_str) = card.strip_prefix("nvidia:") {
         let idx: u32 = idx_str.parse().unwrap_or(0);
-        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-            if let Ok(device) = nvml.device_by_index(idx) {
+        if let Some(nv) = nvml() {
+            if let Ok(device) = nv.device_by_index(idx) {
                 if let Ok(power_mw) = device.power_usage() {
                     return Ok(power_mw as f32 / 1000.0);
                 }
@@ -567,8 +567,8 @@ pub async fn find_gpu_power(card: &str) -> Result<f32> {
     } else {
         match detect_gpu_vendor_for_card(card) {
             GpuVendor::Amd => {
-                let pattern = format!("/sys/class/drm/{}/device/hwmon/hwmon*", card);
-                if let Ok(path) = glob_first_path(&pattern) {
+                let hwmon_path = format!("/sys/class/drm/{}/device/hwmon", card);
+                if let Some(path) = first_hwmon_dir(&hwmon_path) {
                     let power_path = format!("{}/power1_average", path);
                     if let Ok(microwatts) = read_sysfs_f32(&power_path) {
                         return Ok(microwatts / 1_000_000.0);
@@ -576,8 +576,8 @@ pub async fn find_gpu_power(card: &str) -> Result<f32> {
                 }
             }
             GpuVendor::Nvidia => {
-                if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-                    if let Ok(device) = nvml.device_by_index(0) {
+                if let Some(nv) = nvml() {
+                    if let Ok(device) = nv.device_by_index(0) {
                         if let Ok(power_mw) = device.power_usage() {
                             return Ok(power_mw as f32 / 1000.0);
                         }
@@ -598,16 +598,16 @@ fn read_sysfs_f32(path: &str) -> Result<f32> {
     Ok(content.trim().parse()?)
 }
 
-/// Return the first match for a glob pattern as a string path
-fn glob_first_path(pattern: &str) -> Result<String> {
-    let output = std::process::Command::new("sh")
-        .args(["-c", &format!("ls -1d {} 2>/dev/null | head -1", pattern)])
-        .output()?;
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() {
-        anyhow::bail!("no match for glob: {}", pattern);
+/// Return the first hwmon directory path inside the given base directory.
+fn first_hwmon_dir(base: &str) -> Option<String> {
+    let entries = fs::read_dir(base).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with("hwmon") {
+            return Some(entry.path().to_string_lossy().into_owned());
+        }
     }
-    Ok(path)
+    None
 }
 
 /// Find motherboard temperature from lm-sensors

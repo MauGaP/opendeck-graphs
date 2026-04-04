@@ -265,7 +265,19 @@ impl GraphData {
                 .settings
                 .threshold
                 .or_else(|| match self.settings.data_source {
-                    DataSource::LmSensors => self.settings.metric_type.default_threshold(),
+                    DataSource::LmSensors => {
+                        let default = self.settings.metric_type.default_threshold();
+                        // In GB mode, scale the percentage-based threshold to GB
+                        match self.settings.metric_type {
+                            MetricType::GpuVram if self.settings.memory_display() == MemoryDisplay::Gigabytes => {
+                                self.vram_total_gb.and_then(|total| default.map(|d| d / 100.0 * total))
+                            }
+                            MetricType::RamUsage if self.settings.memory_display() == MemoryDisplay::Gigabytes => {
+                                self.ram_total_gb.and_then(|total| default.map(|d| d / 100.0 * total))
+                            }
+                            _ => default,
+                        }
+                    }
                     DataSource::WebSocket => None,
                 }),
             color_scheme: ColorScheme {
