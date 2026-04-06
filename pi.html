@@ -23,8 +23,8 @@
 
                 // Get elements
                 const dataSource = document.getElementById("data_source");
-                const lmSensorsSection =
-                    document.getElementById("lmsensors_section");
+                const localSection =
+                    document.getElementById("local_section");
                 const websocketSection =
                     document.getElementById("websocket_section");
                 const websocketBanner =
@@ -56,7 +56,7 @@
 
                 // Set default values from settings
                 const settings = inActionInfo.payload.settings || {};
-                dataSource.value = settings.data_source || "lmsensors";
+                dataSource.value = settings.data_source || "local";
                 visualizationType.value = settings.visualization_type || "graph";
                 metricType.value = settings.metric_type || "cputemp";
                 fanNumber.value = settings.fan_number ?? 1;
@@ -88,7 +88,7 @@
                     const data = JSON.parse(event.data);
                     if (data.event == "didReceiveSettings") {
                         const s = data.payload.settings || {};
-                        dataSource.value = s.data_source || "lmsensors";
+                        dataSource.value = s.data_source || "local";
                         visualizationType.value = s.visualization_type || "graph";
                         metricType.value = s.metric_type || "cputemp";
                         fanNumber.value = s.fan_number ?? 1;
@@ -143,19 +143,19 @@
                 }
 
                 function toggleDataSourceSections() {
-                    if (dataSource.value === "lmsensors") {
-                        lmSensorsSection.style.display = "block";
+                    if (dataSource.value === "local") {
+                        localSection.style.display = "block";
                         websocketSection.style.display = "none";
                         websocketBanner.style.display = "none";
                     } else {
-                        lmSensorsSection.style.display = "none";
+                        localSection.style.display = "none";
                         websocketSection.style.display = "block";
                         websocketBanner.style.display = "flex";
                     }
                 }
 
                 function toggleFanNumberSection() {
-                    if (dataSource.value === "lmsensors" && metricType.value === "systemfan") {
+                    if (dataSource.value === "local" && metricType.value === "systemfan") {
                         fanNumberSection.style.display = "block";
                     } else {
                         fanNumberSection.style.display = "none";
@@ -163,17 +163,17 @@
                 }
 
                 function toggleVramDisplaySection() {
-                    const isVram = dataSource.value === "lmsensors" && metricType.value === "gpuvram";
+                    const isVram = dataSource.value === "local" && metricType.value === "gpuvram";
                     vramDisplaySection.style.display = isVram ? "block" : "none";
                 }
 
                 function toggleRamDisplaySection() {
-                    const isRam = dataSource.value === "lmsensors" && metricType.value === "ramusage";
+                    const isRam = dataSource.value === "local" && metricType.value === "ramusage";
                     ramDisplaySection.style.display = isRam ? "block" : "none";
                 }
 
                 function toggleGpuCardSection() {
-                    const isGpuMetric = dataSource.value === "lmsensors" &&
+                    const isGpuMetric = dataSource.value === "local" &&
                         ["gputemp", "gpuload", "gpuvram", "gpupower"].includes(metricType.value);
                     gpuCardSection.style.display = isGpuMetric ? "block" : "none";
                 }
@@ -241,8 +241,8 @@
                         warning_color: warningColor.value,
                     };
 
-                    // LM Sensors settings
-                    if (dataSource.value === "lmsensors") {
+                    // Local sensor settings
+                    if (dataSource.value === "local") {
                         settings.metric_type = metricType.value;
 
                         // Fan number for system fan
@@ -438,7 +438,7 @@
         <div class="field">
             <label for="data_source">Data Source:</label>
             <select id="data_source" onchange="dataSourceChanged();">
-                <option value="lmsensors">LM Sensors</option>
+                <option value="local">Local Sensors</option>
                 <option value="websocket">WebSocket</option>
             </select>
         </div>
@@ -448,8 +448,8 @@
             <span><strong>Experimental:</strong> WebSocket mode may not work properly in all setups.</span>
         </div>
 
-        <!-- LM Sensors Section -->
-        <div id="lmsensors_section">
+        <!-- Local Sensors Section -->
+        <div id="local_section">
             <div class="field">
                 <label for="metric_type">Metric Type:</label>
                 <select id="metric_type" oninput="metricTypeChanged();">

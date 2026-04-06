@@ -22,7 +22,7 @@ async fn read_sensor_value(
     ws_client: Option<&Arc<WebSocketClient>>,
 ) -> Result<f32> {
     match settings.data_source {
-        DataSource::LmSensors => read_lm_sensors_value(settings).await,
+        DataSource::Local => read_local_sensor_value(settings).await,
         DataSource::WebSocket => {
             if let Some(client) = ws_client {
                 Ok(client.get_value().await)
@@ -33,7 +33,7 @@ async fn read_sensor_value(
     }
 }
 
-async fn read_lm_sensors_value(settings: &GraphSettings) -> Result<f32> {
+async fn read_local_sensor_value(settings: &GraphSettings) -> Result<f32> {
     match settings.metric_type {
         MetricType::CpuTemp | MetricType::CpuPackageTemp => sensors::find_cpu_temperature().await,
         MetricType::CpuLoad => sensors::find_cpu_load().await,
@@ -229,7 +229,7 @@ pub async fn start_sensor_monitoring() {
                                 }
                             } else {
                                 let suffix = match graph_data.settings.data_source {
-                                    DataSource::LmSensors => {
+                                    DataSource::Local => {
                                         graph_data.settings.effective_suffix()
                                     }
                                     DataSource::WebSocket => "",

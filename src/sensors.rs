@@ -647,7 +647,7 @@ fn first_hwmon_dir(base: &str) -> Option<String> {
     None
 }
 
-/// Find motherboard temperature from lm-sensors
+/// Find motherboard temperature via hwmon sysfs
 pub async fn find_motherboard_temperature() -> Result<f32> {
     for (hwmon_path, chip_name) in iter_hwmon() {
         if !chip_name.contains("nct") && !chip_name.contains("it87") {

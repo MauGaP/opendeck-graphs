@@ -11,7 +11,8 @@ const MAX_DATA_POINTS: usize = 60;
 #[serde(rename_all = "lowercase")]
 pub enum DataSource {
     #[default]
-    LmSensors,
+    #[serde(alias = "lmsensors")]
+    Local,
     WebSocket,
 }
 
@@ -221,7 +222,7 @@ impl GraphData {
 
         // Title is always the metric name only (displayed on the graph image)
         let title = match self.settings.data_source {
-            DataSource::LmSensors => {
+            DataSource::Local => {
                 // For system fan, show the fan number
                 if matches!(self.settings.metric_type, MetricType::SystemFan) {
                     if let Some(fan_num) = self.settings.fan_number {
@@ -250,7 +251,7 @@ impl GraphData {
                 .settings
                 .max_value
                 .unwrap_or_else(|| match self.settings.data_source {
-                    DataSource::LmSensors => {
+                    DataSource::Local => {
                         let detected_total = match self.settings.metric_type {
                             MetricType::GpuVram if self.settings.memory_display() == MemoryDisplay::Gigabytes => self.vram_total_gb,
                             MetricType::RamUsage if self.settings.memory_display() == MemoryDisplay::Gigabytes => self.ram_total_gb,
@@ -265,7 +266,7 @@ impl GraphData {
                 .settings
                 .threshold
                 .or_else(|| match self.settings.data_source {
-                    DataSource::LmSensors => {
+                    DataSource::Local => {
                         let default = self.settings.metric_type.default_threshold();
                         // In GB mode, scale the percentage-based threshold to GB
                         match self.settings.metric_type {
