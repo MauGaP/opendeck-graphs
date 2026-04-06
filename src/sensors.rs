@@ -1,5 +1,4 @@
 use anyhow::Result;
-use lm_sensors as sensors;
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
@@ -166,7 +165,6 @@ pub async fn find_cpu_load() -> Result<f32> {
                 let cpu_usage = if let Some((prev_total, prev_active)) = *prev_stats {
                     let total_delta = total.saturating_sub(prev_total);
                     let active_delta = active.saturating_sub(prev_active);
-
                     if total_delta > 0 {
                         (active_delta as f32 / total_delta as f32) * 100.0
                     } else {
@@ -189,9 +187,7 @@ pub async fn find_cpu_load() -> Result<f32> {
 /// Find RAM usage percentage
 pub async fn find_ram_usage() -> Result<f32> {
     let mut sys = System::new();
-    sys.refresh_memory_specifics(
-        MemoryRefreshKind::nothing().with_ram(),
-    );
+    sys.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram());
 
     let total = sys.total_memory();
     let used = sys.used_memory();
@@ -270,7 +266,10 @@ pub async fn find_net_download() -> Result<f32> {
     let networks = Networks::new_with_refreshed_list();
 
     let mut total_rx = 0u64;
-    for (_interface_name, network) in &networks {
+    for (interface_name, network) in &networks {
+        if interface_name == "lo" {
+            continue;
+        }
         total_rx += network.total_received();
     }
 
@@ -291,7 +290,10 @@ pub async fn find_net_upload() -> Result<f32> {
     let networks = Networks::new_with_refreshed_list();
 
     let mut total_tx = 0u64;
-    for (_interface_name, network) in &networks {
+    for (interface_name, network) in &networks {
+        if interface_name == "lo" {
+            continue;
+        }
         total_tx += network.total_transmitted();
     }
 
@@ -306,29 +308,59 @@ pub async fn find_net_upload() -> Result<f32> {
     *prev = Some(total_tx);
     Ok(upload_speed)
 }
-/// Find CPU temperature from lm-sensors
-pub async fn find_cpu_temperature() -> Result<f32> {
-    let sensors_lib = sensors::Initializer::default().initialize()?;
 
-    for chip in sensors_lib.chip_iter(None) {
-        let chip_name = format!("{}", chip);
-        if chip_name.contains("coretemp") || chip_name.contains("k10temp") {
-            for feature in chip.feature_iter() {
-                if let Ok(label) = feature.label() {
-                    if label.contains("Package")
-                        || label.contains("Tdie")
-                        || label.contains("Tctl")
-                        || label.contains("Tccd1")
-                        || label.contains("Core 0")
-                    {
-                        for sub_feature in feature.sub_feature_iter() {
-                            if let Ok(value) = sub_feature.value() {
-                                return Ok(value.raw_value() as f32);
-                            }
-                        }
+/// Read a hwmon sysfs value as f32, dividing by 1000 (millidegrees → degrees, millivolts → volts)
+fn read_hwmon_millis(path: &Path) -> Option<f32> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .map(|v| v / 1000.0)
+}
+
+fn read_hwmon_raw(path: &Path) -> Option<f32> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse::<f32>().ok())
+}
+
+/// Iterate /sys/class/hwmon entries, yielding (hwmon_path, chip_name)
+fn iter_hwmon() -> impl Iterator<Item = (std::path::PathBuf, String)> {
+    let base = Path::new("/sys/class/hwmon");
+    let entries = fs::read_dir(base)
+        .map(|e| e.flatten().collect::<Vec<_>>())
+        .unwrap_or_default();
+    entries.into_iter().filter_map(|entry| {
+        let hwmon_path = entry.path();
+        let name = fs::read_to_string(hwmon_path.join("name"))
+            .or_else(|_| fs::read_to_string(hwmon_path.join("device/name")))
+            .unwrap_or_default();
+        Some((hwmon_path, name.trim().to_string()))
+    })
+}
+
+pub async fn find_cpu_temperature() -> Result<f32> {
+    let priority_labels = ["Package id 0", "Tdie", "Tctl", "Tccd1", "Core 0"];
+
+    for (hwmon_path, chip_name) in iter_hwmon() {
+        if !chip_name.contains("coretemp") && !chip_name.contains("k10temp") {
+            continue;
+        }
+        for n in 1..=32u32 {
+            let label_path = hwmon_path.join(format!("temp{}_label", n));
+            let input_path = hwmon_path.join(format!("temp{}_input", n));
+            if !input_path.exists() {
+                break;
+            }
+            if let Ok(label) = fs::read_to_string(&label_path) {
+                if priority_labels.iter().any(|&p| label.trim().contains(p)) {
+                    if let Some(temp) = read_hwmon_millis(&input_path) {
+                        return Ok(temp);
                     }
                 }
             }
+        }
+        if let Some(temp) = read_hwmon_millis(&hwmon_path.join("temp1_input")) {
+            return Ok(temp);
         }
     }
     Ok(0.0)
@@ -419,21 +451,22 @@ pub async fn find_gpu_temperature(card: &str) -> Result<f32> {
     Ok(0.0)
 }
 
-/// Find motherboard temperature from lm-sensors
 pub async fn find_motherboard_temperature() -> Result<f32> {
-    let sensors_lib = sensors::Initializer::default().initialize()?;
-
-    for chip in sensors_lib.chip_iter(None) {
-        let chip_name = format!("{}", chip);
-        if chip_name.contains("nct") || chip_name.contains("it87") {
-            for feature in chip.feature_iter() {
-                if let Ok(label) = feature.label() {
-                    if label.contains("SYSTIN") || label.contains("MB") {
-                        for sub_feature in feature.sub_feature_iter() {
-                            if let Ok(value) = sub_feature.value() {
-                                return Ok(value.raw_value() as f32);
-                            }
-                        }
+    for (hwmon_path, chip_name) in iter_hwmon() {
+        if !chip_name.contains("nct") && !chip_name.contains("it87") {
+            continue;
+        }
+        for n in 1..=32u32 {
+            let label_path = hwmon_path.join(format!("temp{}_label", n));
+            let input_path = hwmon_path.join(format!("temp{}_input", n));
+            if !input_path.exists() {
+                break;
+            }
+            if let Ok(label) = fs::read_to_string(&label_path) {
+                let label = label.trim();
+                if label.contains("SYSTIN") || label.contains("MB") {
+                    if let Some(temp) = read_hwmon_millis(&input_path) {
+                        return Ok(temp);
                     }
                 }
             }
@@ -442,71 +475,41 @@ pub async fn find_motherboard_temperature() -> Result<f32> {
     Ok(0.0)
 }
 
-/// Find NVMe temperature from lm-sensors
 pub async fn find_nvme_temperature() -> Result<f32> {
-    let sensors_lib = sensors::Initializer::default().initialize()?;
-
-    for chip in sensors_lib.chip_iter(None) {
-        let chip_name = format!("{}", chip);
+    for (hwmon_path, chip_name) in iter_hwmon() {
         if chip_name.contains("nvme") {
-            for feature in chip.feature_iter() {
-                for sub_feature in feature.sub_feature_iter() {
-                    if let Ok(value) = sub_feature.value() {
-                        return Ok(value.raw_value() as f32);
-                    }
-                }
+            if let Some(temp) = read_hwmon_millis(&hwmon_path.join("temp1_input")) {
+                return Ok(temp);
             }
         }
     }
     Ok(0.0)
 }
 
-/// Find system fan speed from lm-sensors by fan number
 pub async fn find_system_fan_speed(fan_number: u32) -> Result<f32> {
-    let sensors_lib = sensors::Initializer::default().initialize()?;
-
-    let target_fan = format!("fan{}", fan_number);
-
-    for chip in sensors_lib.chip_iter(None) {
-        for feature in chip.feature_iter() {
-            // Check if this is a fan feature
-            if let Some(kind) = feature.kind() {
-                if matches!(kind, sensors::feature::Kind::Fan) {
-                    // Check the feature name (like "fan1", "fan2", etc.)
-                    if let Some(Ok(feature_name)) = feature.name() {
-                        if feature_name == target_fan {
-                            for sub_feature in feature.sub_feature_iter() {
-                                if let Some(Ok(name)) = sub_feature.name() {
-                                    if name.contains("input") {
-                                        if let Ok(value) = sub_feature.value() {
-                                            return Ok(value.raw_value() as f32);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    for (hwmon_path, _chip_name) in iter_hwmon() {
+        let fan_path = hwmon_path.join(format!("fan{}_input", fan_number));
+        if let Some(rpm) = read_hwmon_raw(&fan_path) {
+            return Ok(rpm);
         }
     }
-
     log::warn!("System fan {} sensor not found", fan_number);
     Ok(0.0)
 }
 
-/// Find CPU voltage from lm-sensors
 pub async fn find_cpu_voltage() -> Result<f32> {
-    let sensors_lib = sensors::Initializer::default().initialize()?;
-
-    for chip in sensors_lib.chip_iter(None) {
-        for feature in chip.feature_iter() {
-            if let Ok(label) = feature.label() {
+    for (hwmon_path, _chip_name) in iter_hwmon() {
+        for n in 0..=32u32 {
+            let label_path = hwmon_path.join(format!("in{}_label", n));
+            let input_path = hwmon_path.join(format!("in{}_input", n));
+            if !input_path.exists() {
+                break;
+            }
+            if let Ok(label) = fs::read_to_string(&label_path) {
+                let label = label.trim();
                 if label.contains("CPU") && (label.contains("Vcore") || label.contains("in")) {
-                    for sub_feature in feature.sub_feature_iter() {
-                        if let Ok(value) = sub_feature.value() {
-                            return Ok(value.raw_value() as f32);
-                        }
+                    if let Some(v) = read_hwmon_millis(&input_path) {
+                        return Ok(v);
                     }
                 }
             }
