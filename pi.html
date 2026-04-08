@@ -23,8 +23,8 @@
 
                 // Get elements
                 const dataSource = document.getElementById("data_source");
-                const lmSensorsSection =
-                    document.getElementById("lmsensors_section");
+                const localSection =
+                    document.getElementById("local_section");
                 const websocketSection =
                     document.getElementById("websocket_section");
                 const websocketBanner =
@@ -32,6 +32,10 @@
                 const metricType = document.getElementById("metric_type");
                 const fanNumber = document.getElementById("fan_number");
                 const fanNumberSection = document.getElementById("fan_number_section");
+                const vramDisplay = document.getElementById("vram_display");
+                const vramDisplaySection = document.getElementById("vram_display_section");
+                const ramDisplay = document.getElementById("ram_display");
+                const ramDisplaySection = document.getElementById("ram_display_section");
                 const gpuCardSection = document.getElementById("gpu_card_section");
                 const gpuCard = document.getElementById("gpu_card");
                 const visualizationType = document.getElementById("visualization_type");
@@ -52,10 +56,12 @@
 
                 // Set default values from settings
                 const settings = inActionInfo.payload.settings || {};
-                dataSource.value = settings.data_source || "lmsensors";
+                dataSource.value = settings.data_source || "local";
                 visualizationType.value = settings.visualization_type || "graph";
                 metricType.value = settings.metric_type || "cputemp";
                 fanNumber.value = settings.fan_number ?? 1;
+                vramDisplay.value = settings.vram_display || "percentage";
+                ramDisplay.value = settings.ram_display || "percentage";
                 showValueText.checked = settings.show_value_text ?? false;
                 normalColor.value = settings.normal_color || "#00ff00";
                 warningColor.value = settings.warning_color || "#ff0000";
@@ -75,15 +81,19 @@
                 toggleDataSourceSections();
                 toggleFanNumberSection();
                 toggleGpuCardSection();
+                toggleVramDisplaySection();
+                toggleRamDisplaySection();
 
                 websocket.onmessage = (event) => {
                     const data = JSON.parse(event.data);
                     if (data.event == "didReceiveSettings") {
                         const s = data.payload.settings || {};
-                        dataSource.value = s.data_source || "lmsensors";
+                        dataSource.value = s.data_source || "local";
                         visualizationType.value = s.visualization_type || "graph";
                         metricType.value = s.metric_type || "cputemp";
                         fanNumber.value = s.fan_number ?? 1;
+                        vramDisplay.value = s.vram_display || "percentage";
+                        ramDisplay.value = s.ram_display || "percentage";
                         showValueText.checked = s.show_value_text ?? false;
                         threshold.value = s.threshold ?? "";
                         normalColor.value = s.normal_color || "#00ff00";
@@ -102,6 +112,8 @@
                         toggleDataSourceSections();
                         toggleFanNumberSection();
                         toggleGpuCardSection();
+                        toggleVramDisplaySection();
+                        toggleRamDisplaySection();
                     } else if (data.event == "sendToPropertyInspector") {
                         const payload = data.payload || {};
                         if (payload.event === "gpuList") {
@@ -131,28 +143,38 @@
                 }
 
                 function toggleDataSourceSections() {
-                    if (dataSource.value === "lmsensors") {
-                        lmSensorsSection.style.display = "block";
+                    if (dataSource.value === "local") {
+                        localSection.style.display = "block";
                         websocketSection.style.display = "none";
                         websocketBanner.style.display = "none";
                     } else {
-                        lmSensorsSection.style.display = "none";
+                        localSection.style.display = "none";
                         websocketSection.style.display = "block";
                         websocketBanner.style.display = "flex";
                     }
                 }
 
                 function toggleFanNumberSection() {
-                    if (dataSource.value === "lmsensors" && metricType.value === "systemfan") {
+                    if (dataSource.value === "local" && metricType.value === "systemfan") {
                         fanNumberSection.style.display = "block";
                     } else {
                         fanNumberSection.style.display = "none";
                     }
                 }
 
+                function toggleVramDisplaySection() {
+                    const isVram = dataSource.value === "local" && metricType.value === "gpuvram";
+                    vramDisplaySection.style.display = isVram ? "block" : "none";
+                }
+
+                function toggleRamDisplaySection() {
+                    const isRam = dataSource.value === "local" && metricType.value === "ramusage";
+                    ramDisplaySection.style.display = isRam ? "block" : "none";
+                }
+
                 function toggleGpuCardSection() {
-                    const isGpuMetric = dataSource.value === "lmsensors" &&
-                        (metricType.value === "gputemp" || metricType.value === "gpuload");
+                    const isGpuMetric = dataSource.value === "local" &&
+                        ["gputemp", "gpuload", "gpuvram", "gpupower"].includes(metricType.value);
                     gpuCardSection.style.display = isGpuMetric ? "block" : "none";
                 }
 
@@ -197,12 +219,16 @@
                     toggleDataSourceSections();
                     toggleFanNumberSection();
                     toggleGpuCardSection();
+                    toggleVramDisplaySection();
+                    toggleRamDisplaySection();
                     update();
                 };
 
                 window.metricTypeChanged = () => {
                     toggleFanNumberSection();
                     toggleGpuCardSection();
+                    toggleVramDisplaySection();
+                    toggleRamDisplaySection();
                     update();
                 };
 
@@ -215,8 +241,8 @@
                         warning_color: warningColor.value,
                     };
 
-                    // LM Sensors settings
-                    if (dataSource.value === "lmsensors") {
+                    // Local sensor settings
+                    if (dataSource.value === "local") {
                         settings.metric_type = metricType.value;
 
                         // Fan number for system fan
@@ -224,8 +250,16 @@
                             settings.fan_number = parseInt(fanNumber.value);
                         }
 
+                        // Memory display mode
+                        if (metricType.value === "gpuvram") {
+                            settings.vram_display = vramDisplay.value;
+                        }
+                        if (metricType.value === "ramusage") {
+                            settings.ram_display = ramDisplay.value;
+                        }
+
                         // GPU card selection for GPU metrics
-                        if (metricType.value === "gputemp" || metricType.value === "gpuload") {
+                        if (["gputemp", "gpuload", "gpuvram", "gpupower"].includes(metricType.value)) {
                             if (gpuCard.value) {
                                 settings.gpu_card = gpuCard.value;
                             }
@@ -404,7 +438,7 @@
         <div class="field">
             <label for="data_source">Data Source:</label>
             <select id="data_source" onchange="dataSourceChanged();">
-                <option value="lmsensors">LM Sensors</option>
+                <option value="local">Local Sensors</option>
                 <option value="websocket">WebSocket</option>
             </select>
         </div>
@@ -414,8 +448,8 @@
             <span><strong>Experimental:</strong> WebSocket mode may not work properly in all setups.</span>
         </div>
 
-        <!-- LM Sensors Section -->
-        <div id="lmsensors_section">
+        <!-- Local Sensors Section -->
+        <div id="local_section">
             <div class="field">
                 <label for="metric_type">Metric Type:</label>
                 <select id="metric_type" oninput="metricTypeChanged();">
@@ -426,6 +460,8 @@
                     <option value="cpuload">CPU Load</option>
                     <option value="gputemp">GPU Temperature</option>
                     <option value="gpuload">GPU Load</option>
+                    <option value="gpuvram">GPU VRAM Usage</option>
+                    <option value="gpupower">GPU Power Draw</option>
                     <option value="motherboardtemp">
                         Motherboard Temperature
                     </option>
@@ -453,6 +489,28 @@
                 />
                 <div class="help-text">
                     Select which fan sensor to monitor (fan1, fan2, etc.)
+                </div>
+            </div>
+
+            <div id="vram_display_section" class="field" style="display: none">
+                <label for="vram_display">VRAM Display:</label>
+                <select id="vram_display" oninput="update();">
+                    <option value="percentage">Percentage (%)</option>
+                    <option value="gigabytes">Gigabytes (GB)</option>
+                </select>
+                <div class="help-text">
+                    Show VRAM usage as percentage or absolute GB
+                </div>
+            </div>
+
+            <div id="ram_display_section" class="field" style="display: none">
+                <label for="ram_display">RAM Display:</label>
+                <select id="ram_display" oninput="update();">
+                    <option value="percentage">Percentage (%)</option>
+                    <option value="gigabytes">Gigabytes (GB)</option>
+                </select>
+                <div class="help-text">
+                    Show RAM usage as percentage or absolute GB
                 </div>
             </div>
 
