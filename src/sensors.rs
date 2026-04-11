@@ -367,7 +367,9 @@ pub async fn find_cpu_temperature() -> Result<f32> {
     let priority_labels = ["Package id 0", "Tdie", "Tctl", "Tccd1", "Core 0"];
 
     for (hwmon_path, chip_name) in iter_hwmon() {
-        if !chip_name.contains("coretemp") && !chip_name.contains("k10temp") {
+        if !chip_name.contains("coretemp") &&
+            !chip_name.contains("k10temp") &&
+            !chip_name.contains("zenpower") {
             continue;
         }
         for n in 1..=32u32 {
