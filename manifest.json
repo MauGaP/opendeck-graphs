@@ -1,13 +1,17 @@
 {
   "Name": "Hardware Graphs",
   "Author": "Victor Marin",
-  "Version": "2.0.0",
+  "Version": "2.1.1",
   "CodePaths": {
     "x86_64-unknown-linux-gnu": "oa-graphs-x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu": "oa-graphs-aarch64-unknown-linux-gnu"
   },
   "CodePathLin": "oa-graphs-x86_64-unknown-linux-gnu",
-  "OS": [{ "Platform": "linux" }],
+  "OS": [
+    {
+      "Platform": "linux"
+    }
+  ],
   "Category": "Graphs",
   "Description": "Display hardware metrics as timeseries graphs on your Stream Deck",
   "Icon": "img/icon",
@@ -18,7 +22,9 @@
       "Name": "Hardware Graph",
       "UUID": "com.victormarin.graphs.action",
       "Tooltip": "Display hardware metrics as a graph",
-      "States": [{}]
+      "States": [
+        {}
+      ]
     }
   ]
 }
